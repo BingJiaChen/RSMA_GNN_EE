@@ -48,35 +48,35 @@ class node_update_layer(nn.Module):
         self.in_dim_p = in_dim*3
         self.in_dim_c = in_dim*2
         self.in_dim_l = in_dim*2
-        self.hidden = in_dim
 
         self.fu = nn.Sequential(
-            nn.Linear(self.in_dim_p,self.hidden),
-            # nn.BatchNorm1d(self.ch*2),
+            nn.Linear(self.in_dim_p,self.ch*2),
             nn.ReLU(),
-            nn.Linear(self.hidden,self.ch)
-            # nn.Linear(self.in_dim_p,self.ch)
+            nn.Linear(self.ch*2,self.ch)
         )
 
         self.f = nn.Sequential(
-            nn.Linear(self.in_dim_l,self.hidden),
-            # nn.BatchNorm1d(self.ch*2),
+            nn.Linear(self.in_dim_l,self.ch*2),
             nn.ReLU(),
-            nn.Linear(self.hidden,self.ch)
-            # nn.Linear(self.in_dim_l,self.ch)
+            nn.Linear(self.ch*2,self.ch)
         )
 
-        # self.fc = nn.Sequential(
-        #     nn.Linear(self.in_dim_c,self.hidden),
-        #     # nn.BatchNorm1d(self.ch*2),
-        #     nn.ReLU(),
-        #     nn.Linear(self.hidden,self.ch)
-        #     # nn.Linear(self.in_dim_c,self.ch)
-        # )
-    def forward(self,uk, uc, rl, e):
+        self.fc = nn.Sequential(
+            nn.Linear(self.in_dim_c,self.ch*2),
+            nn.ReLU(),
+            nn.Linear(self.ch*2,self.ch)
+        )
+
+        self.edge_update = nn.Sequential(
+            nn.Linear(in_dim+self.ch,self.ch),
+            nn.ReLU(),
+            nn.Linear(self.ch,1)
+        )
+
+    def forward(self,uk, uc, rl, e, e_rc):
         batch_size = uk.shape[0]
         self.K = uk.shape[1]
-        uk_update = torch.zeros((batch_size,self.K,self.ch+uk.shape[-1]))
+        uk_update = torch.zeros((batch_size,self.K,self.ch+uk.shape[-1])).to('cuda')
 
         e_l = e.transpose(2,1)
         e_l = F.normalize(e_l,p=1,dim=2)
@@ -95,9 +95,14 @@ class node_update_layer(nn.Module):
         tmp_rl = self.f(torch.cat((rl,mean_rl),dim=2))
         rl_update = torch.cat((tmp_rl,rl),dim=2)
 
-        uc_update = torch.mean(uk_update,dim=1)
+        mean_uc = torch.matmul(uk.transpose(2,1),e_rc.unsqueeze(2)).squeeze()
+        tmp_uc = self.fc(torch.cat((mean_uc,uc),dim=1))
+        uc_update = torch.cat((tmp_uc,uc),dim=1)
+        e_rc_update = self.edge_update(torch.abs(uc_update.unsqueeze(1).repeat(1,self.K,1)-uk_update))
+        e_rc_update = e_rc_update.squeeze()
+        e_rc_update = F.softmax(e_rc_update,dim=1)
 
-        return uk_update, uc_update, rl_update
+        return uk_update, uc_update, rl_update, e_rc_update
 
 class cal_EE(nn.Module):
     def __init__(self,M,N,L,in_dim):
@@ -105,36 +110,37 @@ class cal_EE(nn.Module):
         self.M = M
         self.N = N
         self.L = L
-        
         self.binary = nn.Sequential(
             nn.Linear(in_dim,in_dim//2),
             nn.ReLU(),
             nn.Linear(in_dim//2,2)
         )
 
-    def forward(self,uk,uc,rl,e):
+    def forward(self,uk,uc,rl,e,e_rc):
         batch_size = uk.shape[0]
         self.K = uk.shape[1]
         adj = torch.zeros((batch_size,self.L+self.K+1,self.L+self.K+1)).to('cuda')
         iden = torch.eye(self.L)
         iden = iden.unsqueeze(0).repeat(batch_size,1,1).to('cuda')
-        adj[:,:self.L,:self.L] = iden
+        # adj[:,:self.L,:self.L] = iden
+        # adj[:,:self.L,self.L:self.L+self.K] = F.normalize(e,p=1,dim=2)
+        # adj[:,self.L:self.L+self.K,:self.L] = F.normalize(e,p=1,dim=2).transpose(2,1)
         adj[:,:self.L,self.L:self.L+self.K] = e
         adj[:,self.L:self.L+self.K,:self.L] = e.transpose(2,1)
         iden = torch.eye(self.K)
         iden = iden.unsqueeze(0).repeat(batch_size,1,1).to('cuda')
-        u2u = torch.ones((batch_size,self.K,self.K))/(self.K-1)
+        u2u = torch.ones((batch_size,self.K,self.K))
         u2u[iden.bool()] = 1
-        # adj[:,self.L:self.L+self.K,self.L:self.L+self.K] = u2u
-        adj[:,self.L+self.K,self.L:self.L+self.K] = 1
-        # adj[:,self.L:self.L+self.K,self.L+self.K] = 1/self.K
+        adj[:,self.L:self.L+self.K,self.L:self.L+self.K] = u2u
+        # adj[:,self.L:self.L+self.K,self.L+self.K] = e_rc
+        adj[:,self.L+self.K,self.L:self.L+self.K] = e_rc
         adj[:,self.L+self.K,self.L+self.K] = 1
 
         laplacian = gen_Laplacian(adj)
+        laplacian = torch.transpose(laplacian,2,1)
         X = torch.cat((rl,uk,uc.unsqueeze(1)),dim=1)
         til_L = torch.matmul(laplacian,X)
-
-        output = self.binary(til_L[:,-1,:])
+        output = self.binary(torch.mean(til_L[:,:,:],dim=1))
         output = F.softmax(output,1)
 
         return output
@@ -146,23 +152,22 @@ class readout(nn.Module):
         self.M = M
         self.N = N
         self.L = L
-        
         self.Pt = Pt
         self.in_dim = in_dim
 
         self.fu = nn.Linear(self.in_dim,self.M*2)
         self.f = nn.Linear(self.in_dim,self.N*2)
-        # self.fc = nn.Linear(self.in_dim,self.M*2)
+        self.fc = nn.Linear(self.in_dim,self.M*2)
 
     def forward(self,uk,uc,rl,mu):
         batch_size = uk.shape[0]
         self.K = uk.shape[1]
-        W = self.fu(uk)
-        # Wc = self.fc(uc)
-        # W = torch.cat((Wc.unsqueeze(1),Wu),dim=1)
+        Wu = self.fu(uk)
+        Wc = self.fc(uc)
+        W = torch.cat((Wc.unsqueeze(1),Wu),dim=1)
         W = W.reshape((batch_size,-1))
         W = F.normalize(W,dim=1)*np.sqrt(self.Pt)*torch.sqrt(mu[:,0]).reshape(-1,1)
-        W = W.reshape((batch_size,self.K,-1))
+        W = W.reshape((batch_size,self.K+1,-1))
 
         Rl = self.f(rl)
         phase_re = Rl[:,:,:self.N].unsqueeze(3)
@@ -197,23 +202,24 @@ class node_update(nn.Module):
     def forward(self,user_feature,e):
         batch_size = user_feature.shape[0]
         uk, uc, rl = self.init_user(user_feature,e)
-        
+        e_rc = (torch.ones((batch_size,uk.shape[1]))/uk.shape[1]).to('cuda')
         for i, _ in enumerate(self.update_list):
             update_layer = self.update_list[i]
-            uk, uc, rl = update_layer(uk, uc, rl, e)
+            uk, uc, rl, e_rc = update_layer(uk, uc, rl, e, e_rc)
             uk = uk.to('cuda')
             uc = uc.to('cuda')
             rl = rl.to('cuda')
+            e_rc = e_rc.to('cuda')
 
-        mu = self.cal_EE(uk,uc,rl,e)
+        mu = self.cal_EE(uk,uc,rl,e,e_rc)
         # mu = torch.ones((batch_size,1)).to('cuda')
         W, theta = self.readout(uk,uc,rl,mu)
 
-        return W, theta, mu
+        return W, theta, mu, e_rc
 
 if __name__ == '__main__':
     M = 8
-    N = 30
+    N = 50
     L = 8
     K = 4
     batch_size = 32
@@ -222,7 +228,7 @@ if __name__ == '__main__':
     model = initial_layer(M,N,L,K,32)
     uk, uc, rl = model(user_feature,e)
 
-    update_layer = node_update_layer(32,M,N,L,K,32)
+    update_layer = node_update_layer(32,M,N,L,32)
     uk, uc, rl = update_layer(uk, uc, rl, e)
 
     uk = uk.to('cuda')
