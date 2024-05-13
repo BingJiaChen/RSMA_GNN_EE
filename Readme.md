@@ -27,9 +27,6 @@ To implement SCA (model-based method) in RSMA scheme, enter the model_based fold
 
 `python model_based.py`
 
-To implement DRL in RSMA scheme, enter the DRL folder and then
-
-`python DRL.py`
 
 ## Experiement Result:
 
