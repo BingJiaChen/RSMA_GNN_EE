@@ -4,7 +4,7 @@
 This is implementation of energy efficiency (EE) maximization in a downlink multiple-input single-output (MISO) reconfigurable intelligent surface (RIS)-aided multiuser system employing rate-splitting multiple access (RSMA). The optimization task entails base station (BS) and RIS beamforming and RSMA common rate allocation with constraints. We propose a graph neural network (GNN) model that learns beamforming and rate allocation directly from the channel information using a unique graph representation derived from the communication system.
 
 This code is for paper : 
-Bing-Jia Chen, Ronald Y. Chang, Feng-Tsun Chien, and H. Vincent Poor, "Energy-Efficient Multi-RIS-Aided Rate-Splitting Multiple Access: A Graph Neural Network Approach," under review.
+B.-J. Chen, R. Y. Chang, F.-T. Chien, and H. V. Poor, "Energy-Efficient Multi-RIS-Aided Rate-Splitting Multiple Access: A Graph Neural Network Approach," IEEE Wireless Communications Letters, to be published.
 
 
 ## Dataset:
