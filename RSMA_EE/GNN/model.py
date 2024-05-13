@@ -129,18 +129,18 @@ class cal_EE(nn.Module):
         adj[:,self.L:self.L+self.K,:self.L] = e.transpose(2,1)
         iden = torch.eye(self.K)
         iden = iden.unsqueeze(0).repeat(batch_size,1,1).to('cuda')
-        u2u = torch.ones((batch_size,self.K,self.K))/(self.K-1)
+        u2u = torch.ones((batch_size,self.K,self.K))
         u2u[iden.bool()] = 1
         adj[:,self.L:self.L+self.K,self.L:self.L+self.K] = u2u
+        # adj[:,self.L:self.L+self.K,self.L+self.K] = e_rc
         adj[:,self.L+self.K,self.L:self.L+self.K] = e_rc
-        # adj[:,self.L:self.L+self.K,self.L+self.K] = 1/self.K
         adj[:,self.L+self.K,self.L+self.K] = 1
 
         laplacian = gen_Laplacian(adj)
+        laplacian = torch.transpose(laplacian,2,1)
         X = torch.cat((rl,uk,uc.unsqueeze(1)),dim=1)
         til_L = torch.matmul(laplacian,X)
-
-        output = self.binary(til_L[:,-1,:])
+        output = self.binary(torch.mean(til_L[:,:,:],dim=1))
         output = F.softmax(output,1)
 
         return output
